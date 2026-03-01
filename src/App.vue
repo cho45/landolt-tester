@@ -4,19 +4,17 @@ import CalibrationView from './views/CalibrationView.vue'
 import SetupView from './views/SetupView.vue'
 import TestView from './views/TestView.vue'
 import ResultView from './views/ResultView.vue'
+import { isCalibrated, isConfigured } from './lib/store'
 
 type ViewState = 'calibration' | 'setup' | 'test' | 'result'
 const currentView = ref<ViewState>('calibration')
 
 onMounted(() => {
-  const ppi = localStorage.getItem('vision_app_ppi')
-  const distance = localStorage.getItem('vision_app_distance_m')
-  
-  if (ppi && distance) {
-    // Both settings exist, skip directly to test
+  if (isConfigured.value) {
+    // Setup and Calibration done, skip directly to test
     currentView.value = 'test'
-  } else if (ppi) {
-    // PPI exists but not distance, skip calibration step
+  } else if (isCalibrated.value) {
+    // Calibration done but not setup, skip to setup
     currentView.value = 'setup'
   }
 })

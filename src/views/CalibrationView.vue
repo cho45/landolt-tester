@@ -27,6 +27,10 @@
           class="reference-shape shape-circle" 
           :style="{ width: shapeWidthPx + 'px', height: shapeHeightPx + 'px' }"
         >
+          <div class="guide-line guide-v guide-left"></div>
+          <div class="guide-line guide-v guide-right"></div>
+          <div class="guide-line guide-h guide-top"></div>
+          <div class="guide-line guide-h guide-bottom"></div>
           <span class="shape-label">{{ shapeWidthMm }}mm</span>
         </div>
         <div 
@@ -58,7 +62,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ppi, appLang, isCalibrated } from '../lib/store'
 
+const { locale } = useI18n()
 const emit = defineEmits(['next'])
 
 const selectedReference = ref<'1yen' | 'card'>('1yen')
@@ -68,9 +75,8 @@ const pixelsPerInch = ref<number>(150)
 
 onMounted(() => {
   // If already calibrated, use the saved value
-  const savedPpi = localStorage.getItem('vision_app_ppi')
-  if (savedPpi) {
-    pixelsPerInch.value = parseFloat(savedPpi)
+  if (isCalibrated.value) {
+    pixelsPerInch.value = ppi.value
   } else {
     // Otherwise try to make an initial guess based on Dpr
     const basePpi = window.devicePixelRatio > 1 ? window.devicePixelRatio * 96 : 150
@@ -80,7 +86,7 @@ onMounted(() => {
 
 const saveLanguage = (e: Event) => {
   const target = e.target as HTMLSelectElement;
-  localStorage.setItem('vision_app_lang', target.value)
+  appLang.value = target.value
 }
 
 const getPixelsFromMm = (mm: number, ppi: number) => {
@@ -88,15 +94,18 @@ const getPixelsFromMm = (mm: number, ppi: number) => {
   return inches * ppi
 }
 
-const shapeWidthMm = computed(() => 20) // Only used for 1yen now
-const shapeHeightMm = computed(() => selectedReference.value === '1yen' ? 20 : 53.98)
+const shapeWidthMm = computed(() => {
+  if (selectedReference.value !== '1yen') return 0;
+  return locale.value === 'en' ? 19.05 : 20; // US Penny is 19.05mm
+})
+const shapeHeightMm = computed(() => selectedReference.value === '1yen' ? shapeWidthMm.value : 53.98)
 
 const shapeWidthPx = computed(() => getPixelsFromMm(shapeWidthMm.value, pixelsPerInch.value))
 const shapeHeightPx = computed(() => getPixelsFromMm(shapeHeightMm.value, pixelsPerInch.value))
 
 const saveAndNext = () => {
-  // Save PPI to local storage or global state here for the actual test to use
-  localStorage.setItem('vision_app_ppi', pixelsPerInch.value.toString())
+  ppi.value = pixelsPerInch.value
+  isCalibrated.value = true
   emit('next')
 }
 </script>
@@ -152,8 +161,10 @@ const saveAndNext = () => {
   border-bottom: 1px dashed var(--border-color);
   margin-bottom: 1.5rem;
   display: flex;
-  align-items: center;
-  padding: 1rem 0;
+  align-items: flex-start;
+  padding: 2rem 0;
+  position: relative;
+  overflow: hidden;
 }
 
 .reference-shape {
@@ -163,12 +174,40 @@ const saveAndNext = () => {
   background-color: var(--accent-color);
   box-shadow: 0 4px 6px rgba(0,0,0,0.3);
   flex-shrink: 0;
+  position: relative;
 }
 
 .shape-circle {
-  margin: 0 auto;
+  margin: 0;
+  margin-left: 3.5rem;
   border-radius: 50%;
+  z-index: 1;
 }
+
+.guide-line {
+  position: absolute;
+  background-color: var(--accent-color);
+  z-index: -1;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.guide-v {
+  top: -100vh;
+  bottom: -100vh;
+  width: 1px;
+}
+
+.guide-h {
+  left: -100vw;
+  right: -100vw;
+  height: 1px;
+}
+
+.guide-left { left: 0; }
+.guide-right { right: 0; }
+.guide-top { top: 0; }
+.guide-bottom { bottom: 0; }
 
 .shape-rect {
   margin-left: 50%;

@@ -1,5 +1,88 @@
-# Vue 3 + TypeScript + Vite
+# Landolt Vision Test (ランドルト環 視力検査アプリ)
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+このプロジェクトは、手や指のジェスチャーを用いて操作可能なランドルト環（Landolt C）による視力検査Webアプリケーションです。デバイスのカメラを使用してジェスチャーを認識するため、離れた場所からでも端末に直接触れることなく検査を実施できます。
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## 主な機能
+
+- **正確なランドルト環の描画**: ユーザーと画面の距離、および画面のピクセル密度(PPI)に基づいて正確な物理サイズでランドルト環を描画・提示します。
+- **ハンドジェスチャー認識**: MediaPipe Tasks Vision を使用して、カメラごしにユーザーが指し示す方向を検出（上、下、左、右）し、入力として受け付けます。
+- **画面キャリブレーション機能**: 正しい視力測定を行うための「距離設定」や「画面サイズ(PPI)設定」を行うUIを備えています。
+- **多言語対応**: `vue-i18n` に対応しており、複数の言語に切り替えての利用が可能です。
+
+## 技術スタック
+
+- **フレームワーク**: Vue 3 (Composition API / `<script setup>`)
+- **ビルドツール**: Vite
+- **言語**: TypeScript
+- **機械学習 (ジェスチャー認識)**: MediaPipe Tasks Vision (`@mediapipe/tasks-vision`)
+- **テスト**: Vitest, Vue Test Utils
+
+---
+
+## 開発の始め方
+
+開発環境をローカルに構築し、動作させるための手順です。
+
+### 前提条件
+
+- **Node.js**: v18以上を推奨します。
+- **Webカメラ**: ジェスチャー認識の動作テストを行うために、Webカメラが接続された環境が必要です。
+
+### 1. インストール
+
+プロジェクトのルートディレクトリ（`package.json` があるディレクトリ）で以下のコマンドを実行し、依存パッケージをインストールします。
+
+```bash
+npm install
+```
+
+### 2. 開発サーバーの起動
+
+インストール完了後、以下のコマンドでViteのローカル開発サーバーを起動します。
+
+```bash
+npm run dev
+```
+
+起動後、コンソールに表示されるURL（通常は `http://localhost:5173` ）にブラウザからアクセスすると、アプリケーションが確認できます。
+※ ブラウザのポップアップでカメラへのアクセス許可を求められた場合は、許可してください。
+
+### 3. プロダクション用ビルド
+
+本番環境向けに最適化されたビルドを生成する場合は、以下のコマンドを実行します。
+
+```bash
+npm run build
+```
+
+出力されたファイル群は `dist` ディレクトリに生成されます。
+ビルド結果をローカルでプレビューする場合は、上記コマンド実行後に以下を実行します。
+
+```bash
+npm run preview
+```
+
+### 4. テストの実行
+
+Vitest によるユニットテストを実行するコマンドです。
+
+```bash
+npm run test
+```
+
+---
+
+## 主要なディレクトリ構成
+
+`src/` 配下は以下のような構造になっています。
+
+```text
+src/
+ ├── assets/      # 使われる画像やフォントなどの静的アセット
+ ├── components/  # アプリケーション内で使い回すUIコンポーネント群
+ ├── lib/         # ジェスチャー認識ロジック、視力計算ロジックなどのコアモジュール
+ ├── views/       # 画面ごとのルートコンポーネント (キャリブレーション、テスト画面、結果画面など)
+ ├── i18n.ts      # 多言語翻訳用リソース
+ ├── main.ts      # Vueアプリケーションのエンドポイント
+ └── App.vue      # ルートのVueコンポーネント (画面遷移・ルーティングを管理)
+```

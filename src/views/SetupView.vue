@@ -19,6 +19,15 @@
           <button class="btn btn-sm" @click="distanceM = Math.min(5.0, distanceM + 0.5)">+</button>
         </div>
       </div>
+      <div class="setting-row limit-row mt-4" v-if="maxLimit > 0">
+        <label>{{ $t('setup.maxLimitDesc') }}:</label>
+        <span class="limit-value">{{ maxLimit.toFixed(1) }}</span>
+      </div>
+    </div>
+
+    <div class="info-box mt-4">
+      <h4>{{ $t('result.disclaimerTitle') }}</h4>
+      <p class="disclaimer-text">{{ $t('result.disclaimerDetails') }}</p>
     </div>
 
     <div class="actions mt-4 action-group">
@@ -29,25 +38,32 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
+import { calculateMaxMeasurableAcuity, getMaxTestableAcuity } from '../lib/landolt'
+import { ppi, distanceM, appLang, isConfigured, isCalibrated } from '../lib/store'
 
 const emit = defineEmits(['next', 'calibrate'])
 
-// Default distance 1.0 meters
-const distanceM = ref(1.0)
+const maxLimit = computed(() => {
+  const dpr = window.devicePixelRatio || 1
+  const rawMax = calculateMaxMeasurableAcuity(ppi.value, dpr, distanceM.value)
+  return getMaxTestableAcuity(rawMax)
+})
 
 const saveAndStart = () => {
-  localStorage.setItem('vision_app_distance_m', distanceM.value.toString())
+  isConfigured.value = true
   emit('next')
 }
 
 const goToCalibration = () => {
+  isCalibrated.value = false
+  isConfigured.value = false
   emit('calibrate')
 }
 
 const saveLanguage = (e: Event) => {
   const target = e.target as HTMLSelectElement;
-  localStorage.setItem('vision_app_lang', target.value)
+  appLang.value = target.value
 }
 </script>
 
@@ -95,6 +111,25 @@ const saveLanguage = (e: Event) => {
   gap: 1rem;
 }
 
+.limit-row {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--border-color);
+  font-size: 0.9rem;
+  color: #64748b;
+  flex-direction: row;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.limit-value {
+  font-weight: bold;
+  color: var(--accent-color);
+  background: #f1f5f9;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.5rem;
+}
+
 .action-group {
   display: flex;
   gap: 1rem;
@@ -118,6 +153,20 @@ const saveLanguage = (e: Event) => {
   border-left: 4px solid var(--accent-color);
   border-radius: 0 0.5rem 0.5rem 0;
   text-align: left;
+}
+
+.info-box h4 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
+  color: var(--text-color);
+}
+
+.disclaimer-text {
+  font-size: 0.85rem;
+  color: #475569;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .mt-4 {

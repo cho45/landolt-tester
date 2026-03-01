@@ -17,11 +17,13 @@
 
     <div class="header">
       <div class="header-left">
-        <span class="acuity-level">{{ $t('test.target') }}: {{ (targetAcuity || 1.0).toFixed(1) }}</span>
+        <span class="acuity-level">{{ $t('test.target') }}: {{ targetAcuity.toFixed(1) }}</span>
         <span class="limit-info">(Limit: {{ maxAcuityLimit.toFixed(1) }})</span>
       </div>
       <span class="distance-info">📏 {{ distanceM.toFixed(1) }}m</span>
-      <span class="progress">{{ $t('test.attempt') }}: {{ attempt }}/{{ maxAttempts }}</span>
+      <span class="progress" v-if="currentPhase === 'warmup'">Warmup</span>
+      <span class="progress" v-else-if="currentPhase === 'screening'">Screening</span>
+      <span class="progress" v-else-if="currentPhase === 'determination'">{{ passCount }}⭕ {{ failCount }}❌</span>
     </div>
 
     <!-- Top floating commands -->
@@ -54,10 +56,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { drawLandoltC, calculateGapSizeMm, Direction } from '../lib/landolt'
-import { initGestureRecognizer, detectGesture, type RecognizedGesture, type NormalizedLandmark } from '../lib/gesture'
+import { drawLandoltC, calculateGapSizeMm, Direction, calculateMaxMeasurableAcuity, getMaxTestableAcuity, getValidAcuityLevels } from '../lib/landolt'
+import { type RecognizedGesture, type NormalizedLandmark } from '../lib/gesture'
+import { VisionTestSession } from '../lib/vision-test-session'
+import { ppi, distanceM, maxLimit, finalResult, testHistory } from '../lib/store'
+import { useGestureCamera } from '../composables/useGestureCamera'
 
 const { t } = useI18n()
 const emit = defineEmits(['next', 'cancel', 'settings'])
@@ -65,175 +70,68 @@ const canvasEl = ref<HTMLCanvasElement | null>(null)
 const videoEl = ref<HTMLVideoElement | null>(null)
 
 // State
-const ppi = ref(150)
-const distanceM = ref(1.0)
 const dpr = ref(1)
 
-const ALL_ACUITY_LEVELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2.0]
 const validAcuityLevels = ref<number[]>([])
 const maxAcuityLimit = ref(2.0)
 
-const searchL = ref(0)
-const searchR = ref(0)
-const currentLevelIdx = ref(0)
-const targetAcuity = ref<number>(0.1)
-const isWarmupPhase = ref(true)
-
-const attempt = ref(1)
-const maxAttempts = 3
-let currentPassCount = 0
-let currentFailCount = 0
+const session = ref<VisionTestSession | null>(null)
+const targetAcuity = computed(() => session.value ? session.value.getCurrentAcuity() : 0.1)
+const currentPhase = computed(() => session.value ? session.value.getPhase() : 'warmup')
+const passCount = computed(() => session.value ? session.value.getCurrentPassCount() : 0)
+const failCount = computed(() => session.value ? session.value.getCurrentFailCount() : 0)
 
 const currentDirection = ref<Direction>(Direction.Right)
 const feedback = ref<string | null>(null)
 const feedbackType = ref<'correct' | 'incorrect'>('correct')
 
-type AttemptRecord = {
-  acuity: number
-  targetDirection: number
-  inputDirection: number
-  isCorrect: boolean
-}
-const testHistory = ref<AttemptRecord[]>([])
-
-// Camera & AI State
-const isCameraActive = ref(false)
-const isLoadingAI = ref(true)
-const lastGesture = ref<RecognizedGesture>('none')
-// Gesture Confidence & Temporal State
-const requiredHoldTimeMs = 2000
-const gestureHistory = {
-  gesture: 'none' as RecognizedGesture,
-  firstSeenAt: 0,
-  lastSeenAt: 0,
-}
-const debugScore = ref(0)
-const capturedLandmarks = ref<NormalizedLandmark[] | null>(null)
-
-let stream: MediaStream | null = null
-let animationFrameId: number | null = null
-let lastVideoTime = -1
 let freezeInputUntil = 0 // Cooldown after a successful gesture
 
-onMounted(async () => {
-  const storedPpi = localStorage.getItem('vision_app_ppi')
-  if (storedPpi) ppi.value = parseFloat(storedPpi)
-  const storedDist = localStorage.getItem('vision_app_distance_m')
-  if (storedDist) distanceM.value = parseFloat(storedDist)
+const {
+  isCameraActive,
+  isLoadingAI,
+  lastGesture,
+  debugScore,
+  capturedLandmarks,
+  activeGesture,
+  activeGestureProgress,
+  initAIAndCamera,
+} = useGestureCamera(
+  videoEl,
+  (gesture: RecognizedGesture) => handleGestureInput(gesture),
+  () => feedback.value === null, // Is test active (not showing feedback)
+  () => freezeInputUntil,
+  () => drawCurrentState() // Just trigger draw with the exact now
+)
 
+onMounted(async () => {
   dpr.value = window.devicePixelRatio || 1
 
-  // Calculate Device Max Measurable Acuity (1px gap threshold)
-  const gapSizeMmFor1px = 25.4 / (ppi.value * dpr.value)
-  const distanceMm = distanceM.value * 1000
-  const radians = 2 * Math.atan(gapSizeMmFor1px / (2 * distanceMm))
-  const arcMinutes = radians * (180 / Math.PI) * 60
-  const maxMeasurableAcuity = 1.0 / arcMinutes
-  maxAcuityLimit.value = maxMeasurableAcuity
+  // Calculate Device Max Measurable Acuity
+  const maxMeasurableAcuity = calculateMaxMeasurableAcuity(ppi.value, dpr.value, distanceM.value)
+  const testableLimit = getMaxTestableAcuity(maxMeasurableAcuity)
+  maxAcuityLimit.value = testableLimit
   
-  console.log(`[DEBUG] Max Measurable Acuity (1px limit): ${maxMeasurableAcuity.toFixed(2)}`)
+  // Save max limit so ResultView knows if we hit the hardware limit
+  maxLimit.value = testableLimit
+  console.log(`[DEBUG] Max Measurable Acuity (1px limit): ${maxMeasurableAcuity.toFixed(2)}, Testable Limit: ${testableLimit.toFixed(1)}`)
   
   // Filter levels based on the physical limit
-  validAcuityLevels.value = ALL_ACUITY_LEVELS.filter(a => a <= maxMeasurableAcuity)
-  if (validAcuityLevels.value.length === 0) validAcuityLevels.value = [0.1]
+  validAcuityLevels.value = getValidAcuityLevels(maxMeasurableAcuity)
   
   initCanvas()
   window.addEventListener('resize', handleResize)
   
   // Start AI init
-  try {
-    await initGestureRecognizer()
-    await startCamera()
-  } catch (e) {
-    console.error("Failed to init AI or camera", e)
-    // Fallback to manual mode
-  } finally {
-    isLoadingAI.value = false
-    startWarmupRoutine() 
-  }
+  initAIAndCamera().then(() => {
+    startWarmupRoutine()
+  })
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
-  stopCamera()
-  if (animationFrameId) cancelAnimationFrame(animationFrameId)
 })
 
-const startCamera = async () => {
-  if (!videoEl.value) return
-  stream = await navigator.mediaDevices.getUserMedia({
-     video: { facingMode: "user", width: 640, height: 480 }
-  })
-  videoEl.value.srcObject = stream
-  isCameraActive.value = true
-  
-  // Wait for video to be ready to play
-  videoEl.value.addEventListener("loadeddata", predictWebcam)
-}
-
-const stopCamera = () => {
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop())
-  }
-  isCameraActive.value = false
-}
-
-const predictWebcam = async () => {
-  if (!videoEl.value || !isCameraActive.value) return
-  
-  let nowInMs = performance.now()
-  if (videoEl.value.currentTime !== lastVideoTime) {
-    lastVideoTime = videoEl.value.currentTime
-    const result = detectGesture(nowInMs, videoEl.value)
-    
-    debugScore.value = result.score
-    capturedLandmarks.value = result.landmarks
-    
-    // Process Gesture temporally
-    if (feedback.value || nowInMs < freezeInputUntil) {
-       // Ignore gestures during cooldown or feedback display, but keep skeleton tracking
-       gestureHistory.gesture = 'none'
-       lastGesture.value = 'none'
-    } else if (result.gesture !== 'none' && result.gesture !== 'unknown') {
-       if (gestureHistory.gesture === result.gesture) {
-         // Same gesture ongoing
-         gestureHistory.lastSeenAt = nowInMs
-         
-         // Have they held it long enough?
-         if (nowInMs - gestureHistory.firstSeenAt > requiredHoldTimeMs) {
-             lastGesture.value = result.gesture
-             handleGestureInput(result.gesture)
-             // reset history to prevent rapid refiring
-             gestureHistory.gesture = 'none'
-         } else {
-            // Actively holding, indicate intent visually
-            lastGesture.value = `${result.gesture} (Hold...)` as RecognizedGesture
-         }
-       } else {
-         // New gesture started
-         gestureHistory.gesture = result.gesture
-         gestureHistory.firstSeenAt = nowInMs
-         gestureHistory.lastSeenAt = nowInMs
-         lastGesture.value = `${result.gesture} (Start)` as RecognizedGesture
-       }
-    } else {
-       // Lost tracking or none
-       if (nowInMs - gestureHistory.lastSeenAt > 500) {
-           // If we lose tracking for half a second, reset
-           gestureHistory.gesture = 'none'
-           lastGesture.value = 'none'
-       }
-    }
-    
-    // Rerender canvas for landmarks and progress bar
-    drawCurrentState(nowInMs)
-  }
-  
-  // Call this function again to keep predicting
-  if (isCameraActive.value) {
-    animationFrameId = requestAnimationFrame(predictWebcam)
-  }
-}
 
 const handleGestureInput = (gesture: RecognizedGesture) => {
   const now = performance.now()
@@ -267,35 +165,11 @@ const initCanvas = () => {
 }
 
 const startWarmupRoutine = () => {
-  isWarmupPhase.value = true
-  searchL.value = 0
-  searchR.value = validAcuityLevels.value.length - 1
-  startLevel(0)
-}
-
-const startTestRoutine = () => {
-  isWarmupPhase.value = false
-  if (validAcuityLevels.value.length <= 1) {
-    finishTest(validAcuityLevels.value[0] || targetAcuity.value)
-    return
-  }
-  
-  // Jump to the middle of the available array, ensuring we skip the 0th index 
-  // which they just completed in the warmup.
-  const mid = Math.floor((searchL.value + searchR.value) / 2)
-  startLevel(Math.max(1, mid))
-}
-
-const startLevel = (idx: number) => {
-  currentLevelIdx.value = idx
-  targetAcuity.value = validAcuityLevels.value[idx] ?? validAcuityLevels.value[validAcuityLevels.value.length - 1] ?? 0.1
-  attempt.value = 1
-  currentPassCount = 0
-  currentFailCount = 0
+  session.value = new VisionTestSession(validAcuityLevels.value)
   drawNextTarget()
 }
 
-const drawCurrentState = (now: number = performance.now()) => {
+const drawCurrentState = () => {
   if (!canvasEl.value) return
   const canvas = canvasEl.value
   const ctx = canvas.getContext('2d')
@@ -313,43 +187,40 @@ const drawCurrentState = (now: number = performance.now()) => {
   drawLandoltC(ctx, cx, cy, gapSizePx, currentDirection.value, '#000000')
 
   // Draw gesture progress bar
-  if (gestureHistory.gesture !== 'none' && gestureHistory.firstSeenAt > 0) {
-      const holdDuration = now - gestureHistory.firstSeenAt
-      if (holdDuration > 0 && holdDuration <= requiredHoldTimeMs) {
-          const progress = holdDuration / requiredHoldTimeMs
-          // Make the progress bar 50% of the screen bounds, but extra thick
-          const maxRadius = Math.min(canvas.width, canvas.height) / 2
-          const radius = maxRadius * 0.5
-          
-          ctx.save()
-          ctx.translate(cx, cy)
-          ctx.rotate(-Math.PI / 2) // Start from top
-          ctx.beginPath()
-          ctx.arc(0, 0, radius, 0, Math.PI * 2 * progress)
-          ctx.lineWidth = 14 // Make it very thick and visible
-          ctx.lineCap = 'round'
-          ctx.strokeStyle = 'rgba(99, 102, 241, 0.9)' // primary color
-          ctx.stroke()
-          ctx.restore()
-          
-          // Draw gesture text above the ring
-          ctx.save()
-          let gestureText = ''
-          if (gestureHistory.gesture === 'up') gestureText = t('test.gestureUp')
-          else if (gestureHistory.gesture === 'down') gestureText = t('test.gestureDown')
-          else if (gestureHistory.gesture === 'left') gestureText = t('test.gestureLeft')
-          else if (gestureHistory.gesture === 'right') gestureText = t('test.gestureRight')
-          
-          if (gestureText) {
-              ctx.font = 'bold 64px sans-serif'
-              ctx.fillStyle = 'rgba(15, 23, 42, 0.9)' // dark clinical gray instead of white
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'bottom'
-              // Draw slightly above the top edge of the ring
-              ctx.fillText(gestureText, cx, cy - radius - 30)
-          }
-          ctx.restore()
+  if (activeGesture.value !== 'none' && activeGestureProgress.value > 0) {
+      const progress = activeGestureProgress.value
+      // Make the progress bar 50% of the screen bounds, but extra thick
+      const maxRadius = Math.min(canvas.width, canvas.height) / 2
+      const radius = maxRadius * 0.5
+      
+      ctx.save()
+      ctx.translate(cx, cy)
+      ctx.rotate(-Math.PI / 2) // Start from top
+      ctx.beginPath()
+      ctx.arc(0, 0, radius, 0, Math.PI * 2 * progress)
+      ctx.lineWidth = 14 // Make it very thick and visible
+      ctx.lineCap = 'round'
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.9)' // primary color
+      ctx.stroke()
+      ctx.restore()
+      
+      // Draw gesture text above the ring
+      ctx.save()
+      let gestureText = ''
+      if (activeGesture.value === 'up') gestureText = t('test.gestureUp')
+      else if (activeGesture.value === 'down') gestureText = t('test.gestureDown')
+      else if (activeGesture.value === 'left') gestureText = t('test.gestureLeft')
+      else if (activeGesture.value === 'right') gestureText = t('test.gestureRight')
+      
+      if (gestureText) {
+          ctx.font = 'bold 64px sans-serif'
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)' // dark clinical gray instead of white
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'bottom'
+          // Draw slightly above the top edge of the ring
+          ctx.fillText(gestureText, cx, cy - radius - 30)
       }
+      ctx.restore()
   }
 
   // Draw detected skeleton on top
@@ -423,7 +294,7 @@ const showFeedback = (isCorrect: boolean) => {
 }
 
 const handleInput = (inputDir: number) => {
-  if (feedback.value) return;
+  if (feedback.value || !session.value) return;
 
   const isCorrect = inputDir === currentDirection.value 
                    || (inputDir === -1 && false) // ? is always false
@@ -437,59 +308,20 @@ const handleInput = (inputDir: number) => {
 
   showFeedback(isCorrect)
 
-  if (isCorrect) currentPassCount++
-  else currentFailCount++
-  
-  attempt.value++
-
-  // Binary Search progression rule:
-  // Pass node if 2 correct. Fail node if 2 incorrect.
-  
   setTimeout(() => {
-    if (isWarmupPhase.value) {
-      if (currentPassCount >= 1) {
-        // Passed warmup, jump into the actual test
-        startTestRoutine()
-      } else if (currentFailCount >= 1) {
-        // Failed the easiest level, finish immediately
-        finishTest(0.1) // Represents <0.1
-      } else {
-        drawNextTarget()
-      }
-      return
-    }
-
-    if (currentPassCount >= 2) {
-      // Node Passed! Move right (harder)
-      searchL.value = currentLevelIdx.value + 1
-      if (searchL.value > searchR.value) {
-        // Search depleted, user reached their limit or the top level
-        finishTest(validAcuityLevels.value[currentLevelIdx.value] || targetAcuity.value)
-      } else {
-        const mid = Math.floor((searchL.value + searchR.value) / 2)
-        startLevel(mid)
-      }
-    } else if (currentFailCount >= 2) {
-      // Node Failed! Move left (easier)
-      searchR.value = currentLevelIdx.value - 1
-      if (searchL.value > searchR.value) {
-        // Search depleted. The maximum passed level is searchR.
-        // If searchR is < 0, they failed even the easiest. We fall back to 0.1 or `<0.1` representation.
-        finishTest(validAcuityLevels.value[Math.max(0, searchR.value)] || 0.1)
-      } else {
-        const mid = Math.floor((searchL.value + searchR.value) / 2)
-        startLevel(mid)
-      }
+    if (!session.value) return;
+    session.value.input(isCorrect);
+    
+    if (session.value.isFinished()) {
+      finishTest(session.value.getFinalResult());
     } else {
-      // Need more attempts to determine pass/fail for this node (e.g., 1 correct, 1 fail)
-      drawNextTarget()
+      drawNextTarget();
     }
   }, 600)
 }
 
 const finishTest = (finalAcuity: number) => {
-  localStorage.setItem('vision_app_result', finalAcuity.toString())
-  localStorage.setItem('vision_app_history', JSON.stringify(testHistory.value))
+  finalResult.value = finalAcuity
   emit('next')
 }
 

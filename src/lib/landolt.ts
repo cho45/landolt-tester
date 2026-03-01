@@ -80,3 +80,50 @@ export function drawLandoltC(
 
   ctx.restore()
 }
+
+/**
+ * Calculates the maximum measurable visual acuity based on device screen constraints.
+ * 
+ * At least 1 physical pixel is required to draw the gap of the Landolt C.
+ * Therefore, the gap size in mm must be >= the physical size of 1 pixel in mm.
+ * 
+ * @param ppi Pixels Per Inch (logical CSS pixels)
+ * @param dpr Device Pixel Ratio (physical pixels per CSS pixel)
+ * @param distanceM Distance from the screen in meters
+ * @returns The absolute maximum acuity (decimal) that can be theoretically measured
+ */
+export function calculateMaxMeasurableAcuity(ppi: number, dpr: number, distanceM: number): number {
+  if (ppi <= 0 || dpr <= 0 || distanceM <= 0) return 0;
+
+  // 1 physical pixel size in mm
+  // 1 inch = 25.4 mm
+  const gapSizeMmFor1px = 25.4 / (ppi * dpr);
+  const distanceMm = distanceM * 1000;
+  
+  // Calculate the visual angle (in radians) subtended by 1 physical pixel
+  const radians = 2 * Math.atan(gapSizeMmFor1px / (2 * distanceMm));
+  
+  // Convert radians to arcminutes
+  const arcMinutes = radians * (180 / Math.PI) * 60;
+  
+  // Visual Acuity = 1 / arcMinutes
+  return 1.0 / arcMinutes;
+}
+
+export const ALL_ACUITY_LEVELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2.0];
+
+export function getValidAcuityLevels(maxMeasurableAcuity: number): number[] {
+  // Add a tiny epsilon to handle floating point exact matches (e.g. 1.9999999 instead of 2.0)
+  const valid = ALL_ACUITY_LEVELS.filter(a => a <= maxMeasurableAcuity + 1e-5);
+  return valid.length > 0 ? valid : [ALL_ACUITY_LEVELS[0]!];
+}
+
+/**
+ * Returns the highest acuity level from ALL_ACUITY_LEVELS that is <= maxMeasurableAcuity
+ */
+export function getMaxTestableAcuity(maxMeasurableAcuity: number): number {
+  const valid = getValidAcuityLevels(maxMeasurableAcuity);
+  return valid[valid.length - 1]!;
+}
+
+

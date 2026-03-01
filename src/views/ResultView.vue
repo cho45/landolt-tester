@@ -11,17 +11,20 @@
     <p>{{ $t('result.estimatedAcuity') }}</p>
     
     <div class="score-card mt-4">
-      <h2 class="score">{{ finalAcuity.toFixed(1) }}</h2>
+      <h2 class="score">{{ finalResult.toFixed(1) }}</h2>
+      <div v-if="isAtDeviceLimit" class="limit-badge mt-2">
+        <span class="badge-warning">ⓘ {{ $t('result.deviceLimit') }}</span>
+      </div>
     </div>
 
-    <div class="info mt-4" v-if="testDistance < 5.0">
+    <div class="info mt-4" v-if="distanceM < 5.0">
       <div class="disclaimer-alert">
         <strong>⚠️ {{ $t('result.disclaimerTitle') }}</strong>
         <p>{{ $t('result.disclaimerDetails') }}</p>
       </div>
     </div>
 
-    <div class="history-section mt-4" v-if="history.length > 0">
+    <div class="history-section mt-4" v-if="testHistory.length > 0">
       <h3>{{ $t('result.historyTitle') }}</h3>
       <div class="table-container">
         <table class="history-table">
@@ -34,7 +37,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(record, idx) in history" :key="idx" :class="{ 'correct-row': record.isCorrect, 'incorrect-row': !record.isCorrect }">
+            <tr v-for="(record, idx) in testHistory" :key="idx" :class="{ 'correct-row': record.isCorrect, 'incorrect-row': !record.isCorrect }">
               <td>{{ record.acuity.toFixed(1) }}</td>
               <td>{{ getDirectionLabel(record.targetDirection) }}</td>
               <td>{{ getDirectionLabel(record.inputDirection) }}</td>
@@ -57,42 +60,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { finalResult, testHistory, maxLimit, distanceM, appLang } from '../lib/store'
+import { ALL_ACUITY_LEVELS } from '../lib/landolt'
 
 const { t } = useI18n()
 const emit = defineEmits(['retry', 'next'])
 
-const finalAcuity = ref(0.1)
-const testDistance = ref(1.0)
-
-type AttemptRecord = {
-  acuity: number
-  targetDirection: number
-  inputDirection: number
-  isCorrect: boolean
-}
-const history = ref<AttemptRecord[]>([])
-
-onMounted(() => {
-  const result = localStorage.getItem('vision_app_result')
-  if (result) {
-    finalAcuity.value = parseFloat(result)
-  }
-
-  const storedDist = localStorage.getItem('vision_app_distance_m')
-  if (storedDist) {
-    testDistance.value = parseFloat(storedDist)
-  }
-
-  const rawHistory = localStorage.getItem('vision_app_history')
-  if (rawHistory) {
-    try {
-      history.value = JSON.parse(rawHistory)
-    } catch (e) {
-      console.error(e)
-    }
-  }
+const isAtDeviceLimit = computed(() => {
+  const absoluteMax = ALL_ACUITY_LEVELS[ALL_ACUITY_LEVELS.length - 1]!
+  return finalResult.value >= maxLimit.value && maxLimit.value < absoluteMax
 })
 
 const getDirectionLabel = (dir: number) => {
@@ -105,7 +83,7 @@ const getDirectionLabel = (dir: number) => {
 
 const saveLanguage = (e: Event) => {
   const target = e.target as HTMLSelectElement;
-  localStorage.setItem('vision_app_lang', target.value)
+  appLang.value = target.value
 }
 
 const testAgainDirect = () => {
@@ -151,6 +129,18 @@ const testAgainDirect = () => {
   color: var(--accent-color);
   margin: 0;
   font-weight: 800;
+}
+
+.limit-badge {
+  font-size: 0.9rem;
+  color: #b45309;
+}
+
+.badge-warning {
+  background: #fef3c7;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  font-weight: bold;
 }
 
 .info {
